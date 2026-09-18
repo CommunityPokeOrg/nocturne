@@ -37,10 +37,12 @@ interface NavNotificationControllerOptions {
   schedule?: (callback: () => void, delayMs: number) => DismissTimer;
   cancel?: (timer: DismissTimer) => void;
   durationMs?: number;
+  presentationEnabled?: boolean;
 }
 
 export interface NavNotificationController {
   update: (guidance: NavGuidance) => void;
+  setPresentationEnabled: (enabled: boolean) => void;
   clear: () => void;
   dispose: () => void;
 }
@@ -54,7 +56,9 @@ export const createNavNotificationController = ({
   schedule = (callback, delayMs) => setTimeout(callback, delayMs),
   cancel = (timer) => clearTimeout(timer),
   durationMs = NAV_NOTIFICATION_DURATION_MS,
+  presentationEnabled = true,
 }: NavNotificationControllerOptions): NavNotificationController => {
+  let canPresent = presentationEnabled;
   let lastManeuverKey: string | null = null;
   let currentId: string | null = null;
   let timer: DismissTimer | null = null;
@@ -75,6 +79,7 @@ export const createNavNotificationController = ({
   };
 
   const update = (guidance: NavGuidance) => {
+    if (!canPresent) return;
     const maneuverKey = guidance.instruction;
     if (maneuverKey === lastManeuverKey) return;
     lastManeuverKey = maneuverKey;
@@ -110,5 +115,11 @@ export const createNavNotificationController = ({
     lastManeuverKey = null;
   };
 
-  return { update, clear, dispose };
+  const setPresentationEnabled = (enabled: boolean) => {
+    if (canPresent === enabled) return;
+    canPresent = enabled;
+    if (!enabled) clear();
+  };
+
+  return { update, setPresentationEnabled, clear, dispose };
 };

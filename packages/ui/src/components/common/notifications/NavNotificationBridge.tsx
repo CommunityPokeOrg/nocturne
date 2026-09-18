@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useNotifications } from "../../../contexts/NotificationContext";
+import { useSettings } from "../../../contexts/SettingsContext";
 import { addGlobalWsListener } from "../../../hooks/useNocturned";
 import type { WsMessage } from "../../../types";
 import {
@@ -10,12 +11,14 @@ import {
 
 const NavNotificationBridge = () => {
   const { addNotification, removeNotification } = useNotifications();
+  const { showNativeNotifications } = useSettings();
   const controllerRef = useRef<NavNotificationController | null>(null);
 
   useEffect(() => {
     const controller = createNavNotificationController({
       addNotification,
       removeNotification,
+      presentationEnabled: showNativeNotifications,
     });
     controllerRef.current = controller;
 
@@ -40,6 +43,10 @@ const NavNotificationBridge = () => {
       if (controllerRef.current === controller) controllerRef.current = null;
     };
   }, [addNotification, removeNotification]);
+
+  useEffect(() => {
+    controllerRef.current?.setPresentationEnabled(showNativeNotifications);
+  }, [showNativeNotifications]);
 
   return null;
 };

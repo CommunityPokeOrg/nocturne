@@ -35,7 +35,7 @@ describe("normalizeNavUpdate", () => {
   });
 });
 
-const harness = () => {
+const harness = (options = {}) => {
   const added = [];
   const removed = [];
   const timers = [];
@@ -56,6 +56,7 @@ const harness = () => {
       timer.cancelled = true;
     },
     durationMs: 8000,
+    ...options,
   });
   const fireLastTimer = () => {
     const timer = timers[timers.length - 1];
@@ -71,6 +72,43 @@ const turn = (instruction, distance) => ({
 });
 
 describe("createNavNotificationController", () => {
+  test("suppresses GPS guidance when phone notifications start disabled", () => {
+    const { controller, added, timers } = harness({
+      presentationEnabled: false,
+    });
+    controller.update(turn("Turn left onto Main St", "300 m"));
+    controller.clear();
+    controller.update(turn("Turn right onto Oak Ave", "120 m"));
+    expect(added).toHaveLength(0);
+    expect(timers).toHaveLength(0);
+
+    controller.setPresentationEnabled(true);
+    expect(added).toHaveLength(0);
+    controller.update(turn("Turn right onto Oak Ave", "100 m"));
+    expect(added).toHaveLength(1);
+  });
+
+  test("disabling phone notifications clears GPS guidance until re-enabled", () => {
+    const { controller, added, removed, timers, fireLastTimer } = harness();
+    controller.update(turn("Turn left onto Main St", "300 m"));
+    controller.setPresentationEnabled(false);
+    controller.setPresentationEnabled(false);
+    expect(removed).toEqual(["n1"]);
+    expect(timers[0].cancelled).toBe(true);
+    fireLastTimer();
+    expect(removed).toEqual(["n1"]);
+
+    controller.update(turn("Turn right onto Oak Ave", "120 m"));
+    expect(added).toHaveLength(1);
+    expect(timers).toHaveLength(1);
+
+    controller.setPresentationEnabled(true);
+    expect(added).toHaveLength(1);
+    controller.update(turn("Turn left onto Main St", "80 m"));
+    expect(added).toHaveLength(2);
+    expect(timers).toHaveLength(2);
+  });
+
   test("posts a banner on the first turn with the maneuver glyph as its icon", () => {
     const { controller, added } = harness();
     controller.update(turn("Turn left onto Main St", "300 m"));

@@ -14,8 +14,7 @@ debug-iap2-frame-tap = ["iap2-rs/frame-tap"]
 
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
-bluer = { workspace = true, features = ["rfcomm", "bluetoothd"] }
-iap2-rs = { workspace = true }
+
 bytes = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
@@ -27,12 +26,10 @@ rmp-serde = { workspace = true }
 rmpv = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
-uuid = { workspace = true }
+macaddr = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 futures = { workspace = true }
 libc = { workspace = true }
-dbus = { workspace = true }
-dbus-crossroads = { workspace = true }
-dbus-tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
 async-trait = { workspace = true }
@@ -54,3 +51,10 @@ tokio-util = { workspace = true, features = ["rt"] }
 filetime = { workspace = true }
 zstd = { workspace = true }
 tar = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+iap2-rs = { workspace = true }
+bluer = { workspace = true, features = ["rfcomm", "bluetoothd"] }
+dbus = { workspace = true }
+dbus-crossroads = { workspace = true }
+dbus-tokio = { workspace = true }

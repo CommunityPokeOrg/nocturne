@@ -543,6 +543,7 @@ impl WebSocketServer {
         }
     }
 
+    #[cfg(not(target_os = "android"))]
     async fn apply_pairing_window(
         adapter: &bluer::Adapter,
         discoverable: bool,
@@ -568,6 +569,7 @@ impl WebSocketServer {
         Ok(())
     }
 
+    #[cfg(not(target_os = "android"))]
     pub async fn restore_pairing_window(&self, adapter: &bluer::Adapter) -> bluer::Result<bool> {
         let _transition = self.pairing_window_lock.lock().await;
         let discoverable = self.pairing_window_requested.load(Ordering::SeqCst);
@@ -575,6 +577,7 @@ impl WebSocketServer {
         Ok(discoverable)
     }
 
+    #[cfg(not(target_os = "android"))]
     pub fn image_cache(&self) -> Arc<Mutex<ImageCache>> {
         Arc::clone(&self.image_cache)
     }
@@ -599,6 +602,7 @@ impl WebSocketServer {
         pending.remove(request_id);
     }
 
+    #[cfg(not(target_os = "android"))]
     pub async fn cancel_all_pending_image_fetches(&self) {
         let pending_ids: Vec<String> = {
             let mut pending = self.pending_image_fetches.write().await;
@@ -1083,9 +1087,7 @@ impl WebSocketServer {
                 }
 
                 if method == "bluetooth.pairing.pending" {
-                    let request = crate::bluetooth::pairing::pending_request()
-                        .map(serde_json::to_value)
-                        .transpose()?;
+                    let request = pending_pairing_request()?;
                     self.send_typed_response(id, BluetoothPairingPendingResponse { request })
                         .await;
                     return Ok(());
@@ -1101,9 +1103,11 @@ impl WebSocketServer {
                         let _transition = self.pairing_window_lock.lock().await;
                         self.pairing_window_requested
                             .store(discoverable, Ordering::SeqCst);
-                        let session = bluer::Session::new().await?;
-                        let adapter = session.default_adapter().await?;
-                        Self::apply_pairing_window(&adapter, discoverable).await
+                        if crate::emulator::enabled() {
+                            crate::emulator::state::set_discoverable(discoverable);
+                            return Ok(());
+                        }
+                        apply_adapter_pairing_window(discoverable).await
                     }
                     .await;
 
@@ -1133,121 +1137,21 @@ impl WebSocketServer {
                     return Ok(());
                 }
 
+                if method == "bluetooth.devices.list" && crate::emulator::enabled() {
+                    let devices = crate::emulator::state::devices_payload().await;
+                    self.send_typed_response(
+                        id,
+                        BluetoothDevicesListResponse {
+                            payload: devices,
+                            r#type: "bluetooth_device_list".to_string(),
+                        },
+                    )
+                    .await;
+                    return Ok(());
+                }
+
                 if method == "bluetooth.devices.list" {
-                    use dbus::arg::RefArg;
-                    use dbus::blocking::stdintf::org_freedesktop_dbus::ObjectManager;
-                    use dbus::blocking::Connection;
-                    use std::time::Duration;
-
-                    let devices_result =
-                        (|| -> std::result::Result<BluetoothDevicesListResponse, String> {
-                            let conn = Connection::new_system().map_err(|e| e.to_string())?;
-                            let proxy = conn.with_proxy("org.bluez", "/", Duration::from_secs(1));
-                            let objects = proxy.get_managed_objects().map_err(|e| e.to_string())?;
-
-                            let mut devices = Vec::new();
-
-                            for (_path, interfaces) in objects {
-                                if let Some(device_props) = interfaces.get("org.bluez.Device1") {
-                                    let address = device_props
-                                        .get("Address")
-                                        .and_then(|v| v.0.as_str())
-                                        .unwrap_or("unknown")
-                                        .to_string();
-
-                                    let name = device_props
-                                        .get("Name")
-                                        .and_then(|v| v.0.as_str())
-                                        .or_else(|| {
-                                            device_props.get("Alias").and_then(|v| v.0.as_str())
-                                        })
-                                        .unwrap_or("Unknown Device")
-                                        .to_string();
-
-                                    let icon = device_props
-                                        .get("Icon")
-                                        .and_then(|v| v.0.as_str())
-                                        .map(|value| value.to_string());
-
-                                    let class =
-                                        device_props.get("Class").and_then(|v| v.0.as_u64());
-
-                                    let looks_like_macos_connector =
-                                        crate::bluetooth::metadata_identifies_computer(
-                                            icon.as_deref(),
-                                            class.and_then(|value| u32::try_from(value).ok()),
-                                            Some(&name),
-                                            Some(&name),
-                                        );
-
-                                    let paired = device_props
-                                        .get("Paired")
-                                        .and_then(|v| v.0.as_u64())
-                                        .map(|v| v != 0)
-                                        .unwrap_or(false);
-
-                                    let blocked = device_props
-                                        .get("Blocked")
-                                        .and_then(|v| v.0.as_u64())
-                                        .map(|v| v != 0)
-                                        .unwrap_or(false);
-
-                                    let connected = device_props
-                                        .get("Connected")
-                                        .and_then(|v| v.0.as_u64())
-                                        .map(|v| v != 0)
-                                        .unwrap_or(false);
-
-                                    let trusted = device_props
-                                        .get("Trusted")
-                                        .and_then(|v| v.0.as_u64())
-                                        .map(|v| v != 0)
-                                        .unwrap_or(false);
-
-                                    if paired {
-                                        let mut payload = serde_json::json!({
-                                            "address": address,
-                                            "blocked": blocked,
-                                            "default": trusted,
-                                            "connected": connected,
-                                            "device_info": {
-                                                "name": name,
-                                                "icon": icon,
-                                                "class": class
-                                            }
-                                        });
-
-                                        if looks_like_macos_connector {
-                                            if let Some(object) = payload.as_object_mut() {
-                                                object.insert(
-                                                    "device_type".to_string(),
-                                                    serde_json::json!("macos_connector"),
-                                                );
-                                                object.insert(
-                                                    "connection_type".to_string(),
-                                                    serde_json::json!("macos_connector"),
-                                                );
-                                                object.insert(
-                                                    "channel".to_string(),
-                                                    serde_json::json!(
-                                                        crate::bluetooth::BluetoothDaemon::MACOS_CONNECTOR_PROBE_CHANNEL
-                                                    ),
-                                                );
-                                            }
-                                        }
-
-                                        devices.push(payload);
-                                    }
-                                }
-                            }
-
-                            Ok(BluetoothDevicesListResponse {
-                                payload: devices,
-                                r#type: "bluetooth_device_list".to_string(),
-                            })
-                        })();
-
-                    match devices_result {
+                    match bluez_devices_list() {
                         Ok(response) => self.send_typed_response(id, response).await,
                         Err(e) => {
                             let msg = WebSocketMessage::Error { id, error: e };
@@ -1410,6 +1314,17 @@ impl WebSocketServer {
 
                 if method == "ota.activate" {
                     info!("Received explicit OTA activation request from UI");
+                    if crate::emulator::enabled() {
+                        self.send_typed_response(
+                            id,
+                            libnocturne::generated::ota::OtaActivateResponse {
+                                success: true,
+                                error: None,
+                            },
+                        )
+                        .await;
+                        return Ok(());
+                    }
                     match crate::ota::schedule_daemon_activation().await {
                         Ok(()) => {
                             self.send_typed_response(
@@ -1456,6 +1371,19 @@ impl WebSocketServer {
                 if method == "device.power.reboot" {
                     info!("Received device.power.reboot command, executing reboot");
 
+                    if crate::emulator::enabled() {
+                        self.send_typed_response(
+                            id,
+                            DevicePowerRebootResponse {
+                                success: true,
+                                error: None,
+                            },
+                        )
+                        .await;
+                        Self::emulator_restart_self();
+                        return Ok(());
+                    }
+
                     let _ = tokio::process::Command::new("sync").output().await;
 
                     let output = tokio::process::Command::new("reboot").output().await;
@@ -1494,6 +1422,19 @@ impl WebSocketServer {
                 if method == "device.power.off" {
                     info!("Received device.power.off command, executing halt");
 
+                    if crate::emulator::enabled() {
+                        self.send_typed_response(
+                            id,
+                            DevicePowerOffResponse {
+                                success: true,
+                                error: None,
+                            },
+                        )
+                        .await;
+                        Self::emulator_restart_self();
+                        return Ok(());
+                    }
+
                     let _ = tokio::process::Command::new("sync").output().await;
 
                     let output = tokio::process::Command::new("halt").output().await;
@@ -1531,6 +1472,19 @@ impl WebSocketServer {
 
                 if method == "device.power.shutdown" {
                     info!("Received device.power.shutdown command, executing halt");
+
+                    if crate::emulator::enabled() {
+                        self.send_typed_response(
+                            id,
+                            DevicePowerShutdownResponse {
+                                success: true,
+                                error: None,
+                            },
+                        )
+                        .await;
+                        Self::emulator_restart_self();
+                        return Ok(());
+                    }
 
                     let _ = tokio::process::Command::new("sync").output().await;
 
@@ -1602,6 +1556,11 @@ impl WebSocketServer {
                             warn!("Failed to apply factory reset before reboot: {}", e);
                         } else {
                             info!("Factory-resettable state cleared successfully");
+                        }
+
+                        if crate::emulator::enabled() {
+                            info!("Step 3/3: Emulator reset applied; exiting for restart");
+                            std::process::exit(0);
                         }
 
                         info!("Step 3/3: Syncing filesystem and rebooting");
@@ -1856,6 +1815,15 @@ impl WebSocketServer {
         for conn in connections.values() {
             conn.enqueue(error_msg.clone());
         }
+    }
+
+    /// Emulator stand-in for reboot/halt: exit so the app (or host tooling)
+    /// restarts the daemon, mirroring the device power-cycle UX.
+    fn emulator_restart_self() {
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            std::process::exit(0);
+        });
     }
 }
 
@@ -2318,4 +2286,142 @@ mod tests {
 
         assert_eq!(playback_active_from_now_playing(&data), Some(true));
     }
+}
+
+#[cfg(not(target_os = "android"))]
+fn pending_pairing_request() -> std::result::Result<Option<serde_json::Value>, serde_json::Error> {
+    crate::bluetooth::pairing::pending_request()
+        .map(serde_json::to_value)
+        .transpose()
+}
+
+#[cfg(target_os = "android")]
+fn pending_pairing_request() -> std::result::Result<Option<serde_json::Value>, serde_json::Error> {
+    Ok(None)
+}
+
+#[cfg(not(target_os = "android"))]
+async fn apply_adapter_pairing_window(discoverable: bool) -> std::result::Result<(), String> {
+    let session = bluer::Session::new().await.map_err(|e| e.to_string())?;
+    let adapter = session.default_adapter().await.map_err(|e| e.to_string())?;
+    WebSocketServer::apply_pairing_window(&adapter, discoverable)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "android")]
+async fn apply_adapter_pairing_window(_discoverable: bool) -> std::result::Result<(), String> {
+    Err("Bluetooth adapter is unavailable on this platform".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+fn bluez_devices_list() -> std::result::Result<BluetoothDevicesListResponse, String> {
+    use dbus::arg::RefArg;
+    use dbus::blocking::stdintf::org_freedesktop_dbus::ObjectManager;
+    use dbus::blocking::Connection;
+    use std::time::Duration;
+
+    let conn = Connection::new_system().map_err(|e| e.to_string())?;
+    let proxy = conn.with_proxy("org.bluez", "/", Duration::from_secs(1));
+    let objects = proxy.get_managed_objects().map_err(|e| e.to_string())?;
+
+    let mut devices = Vec::new();
+
+    for (_path, interfaces) in objects {
+        if let Some(device_props) = interfaces.get("org.bluez.Device1") {
+            let address = device_props
+                .get("Address")
+                .and_then(|v| v.0.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let name = device_props
+                .get("Name")
+                .and_then(|v| v.0.as_str())
+                .or_else(|| device_props.get("Alias").and_then(|v| v.0.as_str()))
+                .unwrap_or("Unknown Device")
+                .to_string();
+
+            let icon = device_props
+                .get("Icon")
+                .and_then(|v| v.0.as_str())
+                .map(|value| value.to_string());
+
+            let class = device_props.get("Class").and_then(|v| v.0.as_u64());
+
+            let looks_like_macos_connector = crate::bluetooth::metadata_identifies_computer(
+                icon.as_deref(),
+                class.and_then(|value| u32::try_from(value).ok()),
+                Some(&name),
+                Some(&name),
+            );
+
+            let paired = device_props
+                .get("Paired")
+                .and_then(|v| v.0.as_u64())
+                .map(|v| v != 0)
+                .unwrap_or(false);
+
+            let blocked = device_props
+                .get("Blocked")
+                .and_then(|v| v.0.as_u64())
+                .map(|v| v != 0)
+                .unwrap_or(false);
+
+            let connected = device_props
+                .get("Connected")
+                .and_then(|v| v.0.as_u64())
+                .map(|v| v != 0)
+                .unwrap_or(false);
+
+            let trusted = device_props
+                .get("Trusted")
+                .and_then(|v| v.0.as_u64())
+                .map(|v| v != 0)
+                .unwrap_or(false);
+
+            if paired {
+                let mut payload = serde_json::json!({
+                    "address": address,
+                    "blocked": blocked,
+                    "default": trusted,
+                    "connected": connected,
+                    "device_info": {
+                        "name": name,
+                        "icon": icon,
+                        "class": class
+                    }
+                });
+
+                if looks_like_macos_connector {
+                    if let Some(object) = payload.as_object_mut() {
+                        object.insert(
+                            "device_type".to_string(),
+                            serde_json::json!("macos_connector"),
+                        );
+                        object.insert(
+                            "connection_type".to_string(),
+                            serde_json::json!("macos_connector"),
+                        );
+                        object.insert(
+                            "channel".to_string(),
+                            serde_json::json!(crate::spp::MACOS_CONNECTOR_PROBE_CHANNEL),
+                        );
+                    }
+                }
+
+                devices.push(payload);
+            }
+        }
+    }
+
+    Ok(BluetoothDevicesListResponse {
+        payload: devices,
+        r#type: "bluetooth_device_list".to_string(),
+    })
+}
+
+#[cfg(target_os = "android")]
+fn bluez_devices_list() -> std::result::Result<BluetoothDevicesListResponse, String> {
+    Err("Bluetooth adapter is unavailable on this platform".to_string())
 }

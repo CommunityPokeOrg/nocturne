@@ -60,7 +60,7 @@ impl AppLaunchStore {
 async fn store() -> Result<&'static Mutex<AppLaunchStore>> {
     SETTINGS
         .get_or_try_init(|| async {
-            AppLaunchStore::load(Path::new(SETTINGS_PATH))
+            AppLaunchStore::load(crate::platform::path(SETTINGS_PATH).as_path())
                 .await
                 .map(Mutex::new)
         })

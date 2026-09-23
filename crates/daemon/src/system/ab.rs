@@ -158,7 +158,7 @@ pub fn open_and_load_ab_data() -> Result<ABData> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
-        .open(MISC_DEVICE_PATH)?;
+        .open(crate::platform::path(MISC_DEVICE_PATH))?;
 
     let mut misc_buf = vec![0u8; MISC_BUF_SIZE];
     file.read_exact(&mut misc_buf)?;
@@ -183,7 +183,7 @@ pub fn save_ab_data(mut info: ABData) -> Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
-        .open(MISC_DEVICE_PATH)?;
+        .open(crate::platform::path(MISC_DEVICE_PATH))?;
 
     let mut misc_buf = vec![0u8; MISC_BUF_SIZE];
     file.read_exact(&mut misc_buf)?;

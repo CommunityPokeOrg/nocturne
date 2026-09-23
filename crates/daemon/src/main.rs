@@ -1,11 +1,16 @@
 mod app;
 mod audio;
+#[cfg(not(target_os = "android"))]
 mod bluetooth;
+mod emulator;
 mod error;
 mod hardware;
 mod http;
+#[cfg(not(target_os = "android"))]
 mod iap2;
 mod ota;
+mod platform;
+mod spp;
 mod system;
 
 use anyhow::Result;
@@ -32,8 +37,17 @@ async fn main() -> Result<()> {
 
     info!("nocturned - written by the Nocturne team");
 
+    if emulator::enabled() {
+        info!("Emulator mode enabled; running with a virtual rootfs");
+        if let Err(e) = emulator::rootfs::seed() {
+            warn!("Failed to seed emulator rootfs: {e}; continuing anyway");
+        }
+    }
+
     let config = system::Config::load()?;
     info!("Configuration loaded");
+    #[cfg(target_os = "android")]
+    let _ = config;
 
     if let Err(e) = hardware::init_brightness().await {
         warn!("Failed to initialize brightness: {}, continuing anyway", e);
@@ -78,7 +92,7 @@ async fn main() -> Result<()> {
 
     let webapps_dir: PathBuf = std::env::var("NOCTURNE_WEBAPPS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(http::DEFAULT_WEBAPPS_DIR));
+        .unwrap_or_else(|_| platform::path(http::DEFAULT_WEBAPPS_DIR));
     let webapp_addr: SocketAddr = http::DEFAULT_LISTEN.parse()?;
     tokio::spawn(async move {
         if let Err(e) = http::run(webapp_addr, webapps_dir).await {
@@ -90,10 +104,10 @@ async fn main() -> Result<()> {
     let (ota_events_tx, mut ota_events_rx) = mpsc::channel(64);
     let delta_source_handle = ota::DeltaSource::spawn(
         ota_events_tx.clone(),
-        ota::delta_source::DEFAULT_SOCKET_PATH,
+        platform::path(ota::delta_source::DEFAULT_SOCKET_PATH),
     )
     .await;
-    let transfers_dir = PathBuf::from("/var/lib/nocturne/transfers");
+    let transfers_dir = platform::path("/var/lib/nocturne/transfers");
     let transfers = ota::transfer::ChunkedTransfer::new(transfers_dir.clone());
     let _transfer_reaper_cancel = CancellationToken::new();
     let _transfer_reaper =
@@ -102,7 +116,7 @@ async fn main() -> Result<()> {
         transfers,
         ota_events_tx.clone(),
         delta_source_handle.source.clone(),
-        PathBuf::from("/var/lib/nocturne"),
+        platform::path("/var/lib/nocturne"),
     );
     let ws_for_ota = Arc::clone(&websocket_server);
     tokio::spawn(async move {
@@ -218,8 +232,11 @@ async fn main() -> Result<()> {
     tokio::spawn(audio_capture.run(audio_cmd_rx));
     info!("Audio capture initialized");
 
-    let models_dir =
-        std::env::var("WAKEWORD_MODELS_DIR").unwrap_or_else(|_| "/etc/nocturne/models".to_string());
+    let models_dir = std::env::var("WAKEWORD_MODELS_DIR").unwrap_or_else(|_| {
+        platform::path("/etc/nocturne/models")
+            .to_string_lossy()
+            .into_owned()
+    });
     let threshold = audio::threshold_from_env("WAKEWORD_THRESHOLD", 0.65);
     let support_threshold =
         audio::threshold_from_env("WAKEWORD_SUPPORT_THRESHOLD", threshold.min(0.5));
@@ -399,21 +416,42 @@ async fn main() -> Result<()> {
         }
     });
 
-    let mut daemon = bluetooth::BluetoothDaemon::new(
-        config,
-        Some(ws_to_app_rx),
-        Some(websocket_server),
-        audio_event_rx,
-        audio_cmd_tx,
-        wakeword_pause_tx,
-        Some(ota_handle.cmd_tx.clone()),
-    )
-    .await?;
+    if emulator::enabled() {
+        let mut daemon = emulator::EmulatorDaemon::new(
+            Some(ws_to_app_rx),
+            Some(websocket_server),
+            audio_event_rx,
+            audio_cmd_tx,
+            wakeword_pause_tx,
+            Some(ota_handle.cmd_tx.clone()),
+        )
+        .await?;
 
-    info!("Starting Bluetooth daemon");
-    match daemon.run().await {
-        Ok(_) => info!("Daemon stopped normally"),
-        Err(e) => error!("Daemon error: {}", e),
+        info!("Starting emulator daemon");
+        match daemon.run().await {
+            Ok(_) => info!("Daemon stopped normally"),
+            Err(e) => error!("Daemon error: {}", e),
+        }
+    } else {
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut daemon = bluetooth::BluetoothDaemon::new(
+                config,
+                Some(ws_to_app_rx),
+                Some(websocket_server),
+                audio_event_rx,
+                audio_cmd_tx,
+                wakeword_pause_tx,
+                Some(ota_handle.cmd_tx.clone()),
+            )
+            .await?;
+
+            info!("Starting Bluetooth daemon");
+            match daemon.run().await {
+                Ok(_) => info!("Daemon stopped normally"),
+                Err(e) => error!("Daemon error: {}", e),
+            }
+        }
     }
 
     Ok(())

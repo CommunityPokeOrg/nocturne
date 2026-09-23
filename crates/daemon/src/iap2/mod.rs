@@ -521,7 +521,7 @@ async fn run_iap2_connection(
         if let Some(ota_cmd_tx) = ota_cmd_tx.clone() {
             mp_handler.set_ota_cmd_tx(ota_cmd_tx);
         }
-        mp_handler.set_connection_peer(device_address);
+        mp_handler.set_connection_peer(device_address.into());
         mp_handler.set_connection_route(format!("iap2:{device_address}"));
         app_manager.register_handler(AppProtocolHandlerEnum::MsgPack(Box::new(mp_handler)));
     }

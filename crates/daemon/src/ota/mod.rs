@@ -14,7 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bluer::Address;
 pub use delta_source::DeltaSource;
 use libnocturne::{
     gateway::{
@@ -23,6 +22,7 @@ use libnocturne::{
     },
     OtaError, OtaErrorCode, OtaKind, OtaPhase, OtaProgress,
 };
+use macaddr::MacAddr6 as Address;
 use serde::Serialize;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -44,7 +44,15 @@ const TARGET_VERSION_MAX_LEN: usize = 128;
 /// take effect via the bind mount; the deploy tooling (`just daemon-install`)
 /// targets the same path.
 const BANDAID_ROOT: &str = "/var/lib/bandaid/nocturne";
-pub(crate) const BANDAID_VERSION_PATH: &str = "/var/lib/bandaid/nocturne/.floor-version";
+const BANDAID_VERSION_PATH: &str = "/var/lib/bandaid/nocturne/.floor-version";
+
+fn bandaid_root() -> std::path::PathBuf {
+    crate::platform::path(BANDAID_ROOT)
+}
+
+pub(crate) fn bandaid_version_path() -> std::path::PathBuf {
+    crate::platform::path(BANDAID_VERSION_PATH)
+}
 
 pub type OtaEventTx = mpsc::Sender<OtaEvent>;
 
@@ -1351,13 +1359,13 @@ async fn run_writing(
 
     if !matches!(kind, OtaKind::Image) {
         if let Some(version) = target_version {
-            validate_active_bandaid_overlay(Path::new(BANDAID_ROOT))
+            validate_active_bandaid_overlay(&bandaid_root())
                 .await
                 .map_err(|err| OtaWriteError {
                     code: OtaErrorCode::WriteFailed,
                     msg: format!("installed OTA overlay is incomplete: {err}"),
                 })?;
-            write_installed_version_marker(Path::new(BANDAID_VERSION_PATH), version)
+            write_installed_version_marker(&bandaid_version_path(), version)
                 .await
                 .map_err(|err| OtaWriteError {
                     code: OtaErrorCode::WriteFailed,
@@ -1452,7 +1460,7 @@ async fn run_daemon_write(
     events_tx: &OtaEventTx,
 ) -> Result<(), OtaWriteError> {
     emit_progress(events_tx, OtaPhase::Writing, 0, None).await;
-    daemon_swap::DaemonSwap::new(PathBuf::from(BANDAID_ROOT))
+    daemon_swap::DaemonSwap::new(bandaid_root())
         .install(transfer_path)
         .await
         .map_err(|err| OtaWriteError {
@@ -1468,7 +1476,7 @@ async fn run_webapp_write(
     events_tx: &OtaEventTx,
 ) -> Result<(), OtaWriteError> {
     emit_progress(events_tx, OtaPhase::Writing, 0, None).await;
-    webapp_swap::WebappSwap::new(PathBuf::from(BANDAID_ROOT))
+    webapp_swap::WebappSwap::new(bandaid_root())
         .install(transfer_path)
         .await
         .map_err(|err| OtaWriteError {
@@ -1484,7 +1492,7 @@ async fn run_bandaid_write(
     events_tx: &OtaEventTx,
 ) -> Result<(), OtaWriteError> {
     emit_progress(events_tx, OtaPhase::Writing, 0, None).await;
-    bandaid_swap::BandaidSwap::new(PathBuf::from(BANDAID_ROOT))
+    bandaid_swap::BandaidSwap::new(bandaid_root())
         .install(transfer_path)
         .await
         .map_err(|err| OtaWriteError {

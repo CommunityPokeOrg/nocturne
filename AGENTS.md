@@ -13,6 +13,7 @@ Everything that ships inside a Nocturne SWU lives here. The mobile app, Connecto
 | `crates/swupdate-sys/` | Vendored libswupdate IPC client sources (LGPL-2.1-or-later, sbabic/swupdate@2024.12). Built into a static lib by `cc::Build`. | Bumping the vendored swupdate version, or adding extern wrappers in `crates/daemon/src/ota/swupdate/ffi.rs`. | (see daemon AGENTS) |
 | `tools/codegen/` | Wire-schema codegen for TS/Swift/Kotlin. Reads `crates/shared/src/`, writes `crates/shared/generated/`. | When you change the inventory of methods/events/markers. | (see daemon AGENTS) |
 | `packages/ui/` | The React 19 + Vite kiosk app served by Chromium on the Car Thing (480x800). The static bundle is NOT embedded in the daemon binary; the daemon serves it at runtime from `/opt/nocturne/webapps/ui` (override via `NOCTURNE_WEBAPPS_DIR`), installed onto the rootfs by the `nocturne-ui` image recipe. Deploy a fresh local build to a device with `just -f image/Justfile push-webapp ../packages/ui/dist ui`. | UI work. | [`packages/ui/AGENTS.md`](packages/ui/AGENTS.md) |
+| `packages/android/` | Android emulator app: bundles `nocturned` (emulator mode) + the UI bundle into an APK and hosts them with a WebView and a drawn hardware bezel. | Emulator app work, daemon Android porting (`cfg(target_os = "android")`), bezel/input contract. | [`packages/android/AGENTS.md`](packages/android/AGENTS.md) |
 
 ## Cross-cutting changes
 

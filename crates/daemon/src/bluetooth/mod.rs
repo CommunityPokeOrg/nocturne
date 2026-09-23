@@ -3,28 +3,24 @@ pub mod ancs;
 mod hci;
 pub mod pairing;
 
-use crate::app::msgpack::{
-    create_audio_data_event, create_audio_recording_started_event,
-    create_audio_recording_stopped_event, create_daemon_ready_event, MsgPackMessage,
-    MsgPackProtocolHandler,
-};
 use crate::audio;
-use crate::hardware::ImageCache;
+use crate::spp::{
+    should_route_message, spp_connection_route, GenericConnection, GenericConnectionIdentity,
+    MACOS_CONNECTOR_PROBE_CHANNEL,
+};
 use crate::{
-    app::{AppMessage, AppMessagePriority},
+    app::AppMessage,
     error::Result,
     http::WebSocketServer,
     iap2::{Iap2Connection, Iap2ConnectionOptions},
     system::config::Config,
 };
 use audio::{AudioCommand, AudioEvent, WakeWordCommand};
-use base64::Engine;
 use bluer::{
     rfcomm::{Profile, ReqError, Role, SocketAddr, Stream},
     Adapter, AdapterEvent, Address, Device, DeviceEvent, DeviceProperty, ErrorKind,
     InternalErrorKind, Session, Uuid,
 };
-use bytes::BytesMut;
 use dbus::blocking::Connection;
 use dbus::Path;
 use futures::StreamExt;
@@ -33,7 +29,7 @@ use libnocturne::generated::bluetooth::{
     BluetoothDeviceDisconnectRequest, BluetoothDeviceDisconnectResponse, BluetoothDeviceEvent,
     BluetoothDeviceUnpairRequest, BluetoothDeviceUnpairResponse, BluetoothPairingEvent,
 };
-use libnocturne::generated::bt_only::{AudioRecordingStartedEvent, AudioRecordingStoppedEvent};
+use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 use serde_json as json;
 use std::collections::{HashMap, HashSet};
@@ -43,22 +39,12 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
-pub struct GenericConnection {
-    pub connection_id: String,
-    pub device_address: Address,
-    pub tx: mpsc::UnboundedSender<AppMessage>,
-}
-
-struct GenericConnectionIdentity {
-    connection_id: String,
-    device: Address,
-}
 const IAP2_RFCOMM_CHANNEL: u8 = 1;
 const ANCS_SERVICE_UUID: Uuid = Uuid::from_u128(0x7905F431_B5CE_4E99_A40F_4B1E122D00D0);
 
@@ -108,52 +94,6 @@ struct AndroidWakeGrant {
 
 fn typed_json<T: Serialize>(payload: T) -> json::Value {
     json::to_value(payload).unwrap_or_else(|_| json::json!({}))
-}
-
-fn remove_generic_connection(
-    connections: &mut Vec<GenericConnection>,
-    connection_id: &str,
-    device: Address,
-) -> bool {
-    connections.retain(|connection| connection.connection_id != connection_id);
-    connections
-        .iter()
-        .any(|connection| connection.device_address == device)
-}
-
-fn target_peer(message: &AppMessage) -> Option<String> {
-    serde_json::from_slice::<json::Value>(&message.data)
-        .ok()
-        .and_then(|data| {
-            data.get("_targetPeer")
-                .and_then(|peer| peer.as_str())
-                .map(ToOwned::to_owned)
-        })
-}
-
-fn target_connection(message: &AppMessage) -> Option<String> {
-    serde_json::from_slice::<json::Value>(&message.data)
-        .ok()
-        .and_then(|data| {
-            data.get("_targetConnection")
-                .and_then(|route| route.as_str())
-                .map(ToOwned::to_owned)
-        })
-}
-
-fn spp_connection_route(connection_id: &str) -> String {
-    format!("spp:{connection_id}")
-}
-
-fn should_route_message(message: &AppMessage, route: &str, peer: Address) -> bool {
-    if let Some(target) = target_connection(message) {
-        return target == route;
-    }
-
-    match target_peer(message) {
-        Some(target) => target == peer.to_string(),
-        None => true,
-    }
 }
 
 pub(crate) fn metadata_identifies_computer(
@@ -581,7 +521,7 @@ impl BluetoothDaemon {
         }
 
         let known_macos_connectors =
-            KnownMacOSConnectors::load(PathBuf::from(KNOWN_MACOS_CONNECTORS_PATH)).await;
+            KnownMacOSConnectors::load(crate::platform::path(KNOWN_MACOS_CONNECTORS_PATH)).await;
 
         Ok(BluetoothDaemon {
             session,
@@ -1189,7 +1129,7 @@ impl BluetoothDaemon {
                         if !should_route_message(
                             &ws_message,
                             &conn.route_id(),
-                            conn.device_address(),
+                            MacAddr6::from(conn.device_address()),
                         ) {
                             continue;
                         }
@@ -1690,13 +1630,15 @@ impl BluetoothDaemon {
 
                         let (app_tx, app_rx) = mpsc::unbounded_channel::<AppMessage>();
                         let connection_id = uuid::Uuid::new_v4().to_string();
+                        let cancel = tokio_util::sync::CancellationToken::new();
 
                         {
                             let mut conns = generic_connections.lock().await;
                             conns.push(GenericConnection {
                                 connection_id: connection_id.clone(),
-                                device_address: device,
+                                device_address: MacAddr6::from(device),
                                 tx: app_tx,
+                                cancel: cancel.clone(),
                             });
                         }
 
@@ -1705,10 +1647,11 @@ impl BluetoothDaemon {
                         let audio_rx = audio_event_rx.resubscribe();
                         let ota_cmd = ota_cmd_tx.clone();
                         tokio::spawn(async move {
-                            Self::run_spp_msgpack_handler(
+                            crate::spp::run_spp_msgpack_handler(
                                 GenericConnectionIdentity {
                                     connection_id,
-                                    device,
+                                    device: MacAddr6::from(device),
+                                    cancel,
                                 },
                                 stream,
                                 generic_conns,
@@ -1728,306 +1671,6 @@ impl BluetoothDaemon {
         });
 
         Ok(())
-    }
-
-    async fn run_spp_msgpack_handler(
-        connection: GenericConnectionIdentity,
-        mut stream: Stream,
-        generic_connections: Arc<Mutex<Vec<GenericConnection>>>,
-        websocket_server: Option<Arc<WebSocketServer>>,
-        mut app_rx: mpsc::UnboundedReceiver<AppMessage>,
-        mut audio_event_rx: broadcast::Receiver<AudioEvent>,
-        ota_cmd_tx: Option<mpsc::Sender<crate::ota::Command>>,
-    ) {
-        let GenericConnectionIdentity {
-            connection_id,
-            device,
-        } = connection;
-        info!(
-            "Starting MsgPack protocol handler for SPP device: {}",
-            device
-        );
-
-        let image_cache = match ImageCache::new().await {
-            Ok(cache) => Arc::new(Mutex::new(cache)),
-            Err(e) => {
-                error!("Failed to create image cache for SPP handler: {}", e);
-                return;
-            }
-        };
-        let mut handler = if let Some(ref ws) = websocket_server {
-            MsgPackProtocolHandler::with_image_cache(Some(Arc::clone(ws)), Arc::clone(&image_cache))
-        } else {
-            MsgPackProtocolHandler::new(None)
-        };
-        if let Some(ota_cmd_tx) = ota_cmd_tx {
-            handler.set_ota_cmd_tx(ota_cmd_tx);
-        }
-        handler.set_connection_peer(device);
-        let connection_route = spp_connection_route(&connection_id);
-        handler.set_connection_route(connection_route.clone());
-
-        let (session_tx, mut session_rx) = mpsc::unbounded_channel::<AppMessage>();
-        handler.set_session_info(session_tx, 0).await;
-
-        let app_ready_received = handler.app_ready_flag();
-        let daemon_ready_interval = Duration::from_secs(3);
-        let mut last_daemon_ready = std::time::Instant::now();
-
-        Self::send_spp_daemon_ready(&mut stream).await;
-
-        let mut audio_events_closed = false;
-
-        let mut read_buf = [0u8; 4096];
-        let mut input_buffer = BytesMut::new();
-
-        loop {
-            tokio::select! {
-                result = stream.read(&mut read_buf) => {
-                    match result {
-                        Ok(0) => {
-                            info!("SPP connection closed by {}", device);
-                            break;
-                        }
-                        Ok(n) => {
-                            debug!("Received {} bytes from SPP device {}", n, device);
-                            input_buffer.extend_from_slice(&read_buf[..n]);
-
-                            let mut write_error = false;
-                            while let Some(newline_pos) = input_buffer.iter().position(|&b| b == b'\n') {
-                                let b64_data = input_buffer[..newline_pos].to_vec();
-
-                                let remaining = input_buffer.split_off(newline_pos + 1);
-                                input_buffer.clear();
-                                input_buffer = remaining;
-
-                                let decoded = match base64::engine::general_purpose::STANDARD.decode(&b64_data) {
-                                    Ok(d) => d,
-                                    Err(e) => {
-                                        error!("Failed to decode base64 from SPP: {}", e);
-                                        continue;
-                                    }
-                                };
-
-                                debug!("Decoded {} base64 bytes to {} raw bytes", b64_data.len(), decoded.len());
-
-                                let msg = AppMessage {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    protocol: "com.usenocturne.daemon".to_string(),
-                                    session_id: 0,
-                                    priority: AppMessagePriority::Normal,
-                                    data: bytes::Bytes::from(decoded),
-                                };
-
-                                debug!("Calling handle_message for msg_id={}", msg.id);
-                                let result = handler.handle_message(msg).await;
-                                debug!("handle_message returned: is_ok={}, has_some={}",
-                                    result.is_ok(),
-                                    result.as_ref().map(|r| r.is_some()).unwrap_or(false));
-
-                                match result {
-                                    Ok(Some(response)) => {
-                                        let b64_response = base64::engine::general_purpose::STANDARD.encode(&response.data);
-                                        let b64_with_newline = format!("{}\n", b64_response);
-                                        debug!("Sending {} bytes response as {} base64 chars", response.data.len(), b64_response.len());
-                                        if let Err(e) = stream.write_all(b64_with_newline.as_bytes()).await {
-                                            error!("Failed to write response to SPP stream: {}", e);
-                                            write_error = true;
-                                            break;
-                                        }
-                                        if let Err(e) = stream.flush().await {
-                                            error!("Failed to flush SPP stream: {}", e);
-                                        }
-                                        debug!("Response sent and flushed to SPP");
-                                    }
-                                    Ok(None) => {
-                                        debug!("handle_message returned Ok(None) - no response needed");
-                                    }
-                                    Err(e) => {
-                                        error!("Error handling SPP message: {}", e);
-                                    }
-                                }
-                            }
-                            if write_error {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            info!("SPP connection error for {}: {}", device, e);
-                            break;
-                        }
-                    }
-                }
-
-                Some(msg) = session_rx.recv() => {
-                    debug!("Sending {} bytes to SPP device {}", msg.data.len(), device);
-                    let b64_data = base64::engine::general_purpose::STANDARD.encode(&msg.data);
-                    let b64_with_newline = format!("{}\n", b64_data);
-                    if let Err(e) = stream.write_all(b64_with_newline.as_bytes()).await {
-                        error!("Failed to write to SPP stream: {}", e);
-                        break;
-                    }
-                    if let Err(e) = stream.flush().await {
-                        error!("Failed to flush SPP stream: {}", e);
-                    }
-                }
-
-                Some(msg) = app_rx.recv() => {
-                    debug!("Forwarding app message to SPP device {}: {} bytes", device, msg.data.len());
-
-                    let msgpack_message = match MsgPackProtocolHandler::outbound_app_message(msg.id.clone(), &msg.data) {
-                        Ok(message) => message,
-                        Err(err) => {
-                            error!(%err, "Failed to encode app message for SPP");
-                            continue;
-                        }
-                    };
-                    if let MsgPackMessage::Call { method, .. } = &msgpack_message {
-                            handler.mark_as_websocket_message(msg.id.clone());
-                            handler.mark_method_for_message(msg.id.clone(), method.to_string());
-
-                            if method == "spotify.image.fetch" {
-                                if let Ok(parsed) = serde_json::from_slice::<json::Value>(&msg.data) {
-                                    if let Some(url) = parsed.get("params")
-                                    .and_then(|p| p.get("url"))
-                                    .and_then(|u| u.as_str())
-                                {
-                                    handler.mark_as_image_request(msg.id.clone(), url.to_string());
-                                    }
-                                }
-                            }
-                    }
-
-                    if let Ok(msgpack_data) = rmp_serde::to_vec_named(&msgpack_message) {
-                        if let Ok(chunks) = MsgPackProtocolHandler::create_chunks(&msgpack_data) {
-                            for chunk in chunks {
-                                let b64_chunk = base64::engine::general_purpose::STANDARD.encode(&chunk);
-                                let b64_with_newline = format!("{}\n", b64_chunk);
-                                if let Err(e) = stream.write_all(b64_with_newline.as_bytes()).await {
-                                    error!("Failed to write chunk to SPP stream: {}", e);
-                                    break;
-                                }
-                            }
-                            if let Err(e) = stream.flush().await {
-                                error!("Failed to flush SPP stream: {}", e);
-                            }
-                        }
-                    }
-                }
-
-                audio_event = audio_event_rx.recv(), if !audio_events_closed => {
-                    match audio_event {
-                        Ok(event) => {
-                            let msg = match &event {
-                                AudioEvent::Data { seq, opus_data, timestamp_ms } => {
-                                    create_audio_data_event(*seq, opus_data, *timestamp_ms)
-                                }
-                                AudioEvent::Started { sample_rate, channels, frame_ms } => {
-                                    create_audio_recording_started_event(AudioRecordingStartedEvent {
-                                        sample_rate: *sample_rate,
-                                        channels: *channels,
-                                        frame_ms: *frame_ms,
-                                        noise_suppressed: Some(true),
-                                    })
-                                }
-                                AudioEvent::Stopped { reason, total_frames } => {
-                                    create_audio_recording_stopped_event(AudioRecordingStoppedEvent {
-                                        reason: reason.clone(),
-                                        total_frames: *total_frames,
-                                    })
-                                }
-                                AudioEvent::MicLevel { .. } => continue,
-                            };
-                            if let Ok(serialized) = rmp_serde::to_vec_named(&msg) {
-                                if let Ok(chunks) = MsgPackProtocolHandler::create_chunks(&serialized) {
-                                    for chunk in chunks {
-                                        let b64_chunk = base64::engine::general_purpose::STANDARD.encode(&chunk);
-                                        let b64_with_newline = format!("{}\n", b64_chunk);
-                                        if let Err(e) = stream.write_all(b64_with_newline.as_bytes()).await {
-                                            error!("Failed to write audio data to SPP stream: {}", e);
-                                            break;
-                                        }
-                                    }
-                                    let _ = stream.flush().await;
-                                }
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("SPP audio event receiver lagged by {} messages", n);
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            debug!("Audio event channel closed for SPP handler");
-                            audio_events_closed = true;
-                        }
-                    }
-                }
-
-                _ = tokio::time::sleep(Duration::from_millis(500)) => {
-                    if !app_ready_received.load(std::sync::atomic::Ordering::Relaxed)
-                        && last_daemon_ready.elapsed() >= daemon_ready_interval
-                    {
-                        Self::send_spp_daemon_ready(&mut stream).await;
-                        last_daemon_ready = std::time::Instant::now();
-                    }
-                }
-            }
-        }
-
-        let has_remaining_connection = {
-            let mut conns = generic_connections.lock().await;
-            remove_generic_connection(&mut conns, &connection_id, device)
-        };
-
-        if let Some(ws_server) = &websocket_server {
-            ws_server.clear_app_ready_for_route(&connection_route).await;
-        }
-
-        if has_remaining_connection {
-            info!(
-                "SPP connection {} for {} closed while another connection remains active",
-                connection_id, device
-            );
-        } else if let Some(ws_server) = &websocket_server {
-            ws_server
-                .broadcast_event(
-                    "bluetooth.connection".to_string(),
-                    typed_json(BluetoothConnectionEvent {
-                        event: "connection_closed".to_string(),
-                        device: device.to_string(),
-                        connection_type: Some("android".to_string()),
-                        device_type: None,
-                        channel: None,
-                        initiated_by: None,
-                    }),
-                )
-                .await;
-        }
-
-        info!(
-            "MsgPack protocol handler stopped for SPP device: {}",
-            device
-        );
-    }
-
-    async fn send_spp_daemon_ready(stream: &mut Stream) {
-        let event = create_daemon_ready_event();
-
-        if let Ok(serialized) = rmp_serde::to_vec_named(&event) {
-            if let Ok(chunks) = MsgPackProtocolHandler::create_chunks(&serialized) {
-                for chunk in chunks {
-                    let b64_chunk = base64::engine::general_purpose::STANDARD.encode(&chunk);
-                    let b64_with_newline = format!("{}\n", b64_chunk);
-                    if let Err(e) = stream.write_all(b64_with_newline.as_bytes()).await {
-                        error!("Failed to send daemon.ready over SPP: {}", e);
-                        return;
-                    }
-                }
-                if let Err(e) = stream.flush().await {
-                    error!("Failed to flush SPP stream after daemon.ready: {}", e);
-                }
-                info!("Sent daemon.ready to Android over SPP");
-            }
-        }
     }
 
     fn create_sdp_record_xml(uuid: &str) -> String {
@@ -2587,7 +2230,6 @@ impl BluetoothDaemon {
     }
 
     const IAP2_LINK_TIMEOUT: Duration = Duration::from_secs(5);
-    pub const MACOS_CONNECTOR_PROBE_CHANNEL: u8 = 3;
     const MACOS_CONNECTOR_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
     const MACOS_CONNECTOR_PROBE_HOLD: Duration = Duration::from_millis(750);
 
@@ -2627,7 +2269,8 @@ impl BluetoothDaemon {
             return Ok(ConnectionOutcome::Connected);
         }
         if generic_connections.lock().await.iter().any(|connection| {
-            connection.device_address == address || connection.device_address == requested_address
+            connection.device_address == MacAddr6::from(address)
+                || connection.device_address == MacAddr6::from(requested_address)
         }) {
             info!("Device {} already has an active SPP session", address);
             return Ok(ConnectionOutcome::Connected);
@@ -2667,8 +2310,7 @@ impl BluetoothDaemon {
         {
             info!(
                 "Attempting macOS connector probe on channel {} for {}",
-                Self::MACOS_CONNECTOR_PROBE_CHANNEL,
-                address
+                MACOS_CONNECTOR_PROBE_CHANNEL, address
             );
             match tokio::time::timeout(
                 Self::MACOS_CONNECTOR_PROBE_TIMEOUT,
@@ -2777,7 +2419,7 @@ impl BluetoothDaemon {
     }
 
     fn is_macos_connector_hint(channel: u8, device_type: &str) -> bool {
-        if channel == Self::MACOS_CONNECTOR_PROBE_CHANNEL {
+        if channel == MACOS_CONNECTOR_PROBE_CHANNEL {
             return true;
         }
 
@@ -2824,19 +2466,18 @@ impl BluetoothDaemon {
                         device: address.to_string(),
                         connection_type: Some("macos_connector".to_string()),
                         device_type: None,
-                        channel: Some(Self::MACOS_CONNECTOR_PROBE_CHANNEL),
+                        channel: Some(MACOS_CONNECTOR_PROBE_CHANNEL),
                         initiated_by: Some("daemon".to_string()),
                     }),
                 )
                 .await;
         }
 
-        let socket_addr = SocketAddr::new(address, Self::MACOS_CONNECTOR_PROBE_CHANNEL);
+        let socket_addr = SocketAddr::new(address, MACOS_CONNECTOR_PROBE_CHANNEL);
         let mut stream = Stream::connect(socket_addr).await?;
         info!(
             "macOS connector probe opened for {} on channel {}",
-            address,
-            Self::MACOS_CONNECTOR_PROBE_CHANNEL
+            address, MACOS_CONNECTOR_PROBE_CHANNEL
         );
         tokio::time::sleep(Self::MACOS_CONNECTOR_PROBE_HOLD).await;
         let _ = stream.shutdown().await;
@@ -3091,6 +2732,8 @@ impl BluetoothDaemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::AppMessagePriority;
+    use crate::spp::remove_generic_connection;
 
     #[test]
     fn adapter_identity_is_set_before_the_radio_is_powered() {
@@ -3114,16 +2757,17 @@ mod tests {
         Address::from_str(value).expect("valid Bluetooth address")
     }
 
-    fn generic_connection(connection_id: &str, device_address: Address) -> GenericConnection {
+    fn generic_connection(connection_id: &str, device_address: MacAddr6) -> GenericConnection {
         let (tx, _rx) = mpsc::unbounded_channel();
         GenericConnection {
             connection_id: connection_id.to_string(),
             device_address,
             tx,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 
-    fn targeted_message(route: Option<&str>, peer: Option<Address>) -> AppMessage {
+    fn targeted_message(route: Option<&str>, peer: Option<MacAddr6>) -> AppMessage {
         let mut payload = serde_json::json!({
             "method": "spotify.auth.get_status",
             "params": {},
@@ -3145,8 +2789,8 @@ mod tests {
 
     #[test]
     fn removing_duplicate_generic_connection_preserves_active_peer_state() {
-        let peer = Address::from_str("D8:3A:DD:31:B0:49").expect("valid peer address");
-        let other = Address::from_str("30:E3:D6:00:B5:5F").expect("valid other address");
+        let peer = MacAddr6::from_str("D8:3A:DD:31:B0:49").expect("valid peer address");
+        let other = MacAddr6::from_str("30:E3:D6:00:B5:5F").expect("valid other address");
         let mut connections = vec![
             generic_connection("stale", peer),
             generic_connection("active", peer),
@@ -3165,7 +2809,7 @@ mod tests {
 
     #[test]
     fn removing_final_generic_connection_reports_peer_disconnected() {
-        let peer = Address::from_str("D8:3A:DD:31:B0:49").expect("valid peer address");
+        let peer = MacAddr6::from_str("D8:3A:DD:31:B0:49").expect("valid peer address");
         let mut connections = vec![generic_connection("final", peer)];
 
         assert!(!remove_generic_connection(&mut connections, "final", peer));
@@ -3174,8 +2818,8 @@ mod tests {
 
     #[test]
     fn connection_target_routes_to_exactly_one_simultaneous_spp_session() {
-        let pi = Address::from_str("D8:3A:DD:31:B0:49").expect("valid Pi address");
-        let mac = Address::from_str("50:F2:65:EB:36:E1").expect("valid Mac address");
+        let pi = MacAddr6::from_str("D8:3A:DD:31:B0:49").expect("valid Pi address");
+        let mac = MacAddr6::from_str("50:F2:65:EB:36:E1").expect("valid Mac address");
         let message = targeted_message(Some("spp:pi"), None);
 
         let matching_routes = [("spp:pi", pi), ("spp:mac", mac)]
@@ -3190,7 +2834,7 @@ mod tests {
 
     #[test]
     fn connection_target_selects_one_overlapping_route_for_the_same_peer() {
-        let peer = Address::from_str("D8:3A:DD:31:B0:49").expect("valid peer address");
+        let peer = MacAddr6::from_str("D8:3A:DD:31:B0:49").expect("valid peer address");
         let message = targeted_message(Some("spp:current"), None);
 
         let matching_routes = [("spp:stale", peer), ("spp:current", peer)]
@@ -3205,8 +2849,8 @@ mod tests {
 
     #[test]
     fn connection_target_takes_precedence_over_peer_target() {
-        let pi = Address::from_str("D8:3A:DD:31:B0:49").expect("valid Pi address");
-        let mac = Address::from_str("50:F2:65:EB:36:E1").expect("valid Mac address");
+        let pi = MacAddr6::from_str("D8:3A:DD:31:B0:49").expect("valid Pi address");
+        let mac = MacAddr6::from_str("50:F2:65:EB:36:E1").expect("valid Mac address");
         let message = targeted_message(Some("spp:mac"), Some(pi));
 
         assert!(!should_route_message(&message, "spp:pi", pi));

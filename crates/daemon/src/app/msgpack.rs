@@ -5,31 +5,37 @@ use crate::{
     error::Result,
 };
 use base64::{engine::general_purpose, Engine as _};
-use bluer::Address;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use libnocturne::gateway::{
     OtaAbandon, OtaAssetRangeChunk, OtaAssetRangeRejected, OtaAssetRangeReply, OtaBegin, OtaChunk,
     OtaDownloadProgress, OtaPackageReady,
 };
+#[cfg(not(target_os = "android"))]
+use libnocturne::generated::bt_only::DaemonHeartbeatEvent;
 use libnocturne::generated::bt_only::{
     AudioDataEvent, AudioRecordingStartedEvent, AudioRecordingStoppedEvent,
-    ChunkRetransmitRequestEvent, DaemonHeartbeatEvent, DaemonReadyEvent, DeviceVolumeUpdateRequest,
+    ChunkRetransmitRequestEvent, DaemonReadyEvent, DeviceVolumeUpdateRequest,
     DeviceVolumeUpdateResponse,
 };
 use libnocturne::generated::device::{
     AppReadyEvent, DeviceTimeGetResponse, NetworkStatusEvent, NotificationShowEvent,
     SubscriptionUpdatedEvent,
 };
+#[cfg(not(target_os = "android"))]
 use libnocturne::generated::media_control::{
     MediaControlLikeResponse, MediaControlNextResponse, MediaControlPauseResponse,
     MediaControlPlayResponse, MediaControlPreviousResponse, MediaControlRepeatResponse,
     MediaControlShuffleResponse, MediaControlUnlikeResponse, MediaControlVolumeDownResponse,
-    MediaControlVolumeUpResponse, MediaNowPlayingArtworkEvent, MediaNowPlayingArtworkFailedEvent,
-    MediaNowPlayingUpdateEvent, PhoneVolumeUpdateEvent,
+    MediaControlVolumeUpResponse,
+};
+use libnocturne::generated::media_control::{
+    MediaNowPlayingArtworkEvent, MediaNowPlayingArtworkFailedEvent, MediaNowPlayingUpdateEvent,
+    PhoneVolumeUpdateEvent,
 };
 use libnocturne::generated::voice::{
     AiResponseEvent, AiStateEvent, AiToolExecutedEvent, VoiceTranscriptionEvent,
 };
+use macaddr::MacAddr6 as Address;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -155,6 +161,7 @@ pub fn create_daemon_ready_event() -> MsgPackMessage {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn create_daemon_heartbeat_event(timestamp: u64) -> MsgPackMessage {
     MsgPackMessage::Event {
         topic: "daemon.heartbeat".to_string(),
@@ -406,6 +413,7 @@ fn normalize_voice_event(topic: String, data: JsonValue) -> (String, JsonValue) 
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn media_control_response_payload(method: &str) -> Option<serde_json::Value> {
     let status = "ok".to_string();
     match method {
@@ -1027,7 +1035,7 @@ struct ChunkedMessage {
     updated_at: Instant,
 }
 
-enum ChunkEnvelopeParse {
+pub(crate) enum ChunkEnvelopeParse {
     Complete {
         message_id: String,
         index: u16,
@@ -1043,7 +1051,7 @@ enum ChunkEnvelopeParse {
 /// Binary layout:
 ///   [1 byte: id_len][id_len bytes: message_id][2 bytes: index BE][2 bytes: total BE]
 ///   [4 bytes: checksum BE][2 bytes: payload_len BE][payload]
-fn parse_one_chunk_envelope(data: &[u8]) -> ChunkEnvelopeParse {
+pub(crate) fn parse_one_chunk_envelope(data: &[u8]) -> ChunkEnvelopeParse {
     if data.is_empty() {
         return ChunkEnvelopeParse::NeedMore;
     }
@@ -1117,6 +1125,7 @@ pub struct MsgPackProtocolHandler {
     session_route: SharedAppSessionRoute,
     ota_pull_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     app_ready_received: Arc<AtomicBool>,
+    #[cfg(not(target_os = "android"))]
     hid_tx: Option<tokio::sync::mpsc::UnboundedSender<iap2_rs::HidCommand>>,
     ota_cmd_tx: Option<mpsc::Sender<crate::ota::Command>>,
     connection_peer: Option<Address>,
@@ -1138,6 +1147,7 @@ impl MsgPackProtocolHandler {
             session_route: Arc::new(Mutex::new(None)),
             ota_pull_task: Arc::new(Mutex::new(None)),
             app_ready_received: Arc::new(AtomicBool::new(false)),
+            #[cfg(not(target_os = "android"))]
             hid_tx: None,
             ota_cmd_tx: None,
             connection_peer: None,
@@ -1165,6 +1175,7 @@ impl MsgPackProtocolHandler {
             session_route: Arc::new(Mutex::new(None)),
             ota_pull_task: Arc::new(Mutex::new(None)),
             app_ready_received: Arc::new(AtomicBool::new(false)),
+            #[cfg(not(target_os = "android"))]
             hid_tx: None,
             ota_cmd_tx: None,
             connection_peer: None,
@@ -1191,6 +1202,7 @@ impl MsgPackProtocolHandler {
         });
     }
 
+    #[cfg(not(target_os = "android"))]
     pub fn set_hid_tx(&mut self, sender: tokio::sync::mpsc::UnboundedSender<iap2_rs::HidCommand>) {
         self.hid_tx = Some(sender);
     }
@@ -1977,6 +1989,7 @@ impl MsgPackProtocolHandler {
                     return Ok(Some(response));
                 }
 
+                #[cfg(not(target_os = "android"))]
                 if method.starts_with("media.control.") {
                     let cmd = crate::app::hid_mapping::method_to_hid_command(&method);
                     return Ok(Some(match cmd {
@@ -2551,6 +2564,7 @@ mod tests {
     use base64::{engine::general_purpose, Engine as _};
     use bytes::{Bytes, BytesMut};
     use libnocturne::generated::bt_only::{AudioRecordingStartedEvent, AudioRecordingStoppedEvent};
+    use macaddr::MacAddr6 as Address;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
@@ -2926,7 +2940,7 @@ mod tests {
 
     #[test]
     fn companion_phone_lifecycle_uses_daemon_observed_peer_identity() {
-        let peer: bluer::Address = "D8:3A:DD:31:B0:49".parse().unwrap();
+        let peer: Address = "D8:3A:DD:31:B0:49".parse().unwrap();
         for topic in [
             "phone.call.started",
             "phone.call.updated",
@@ -2947,7 +2961,7 @@ mod tests {
 
     #[test]
     fn companion_source_identity_does_not_modify_unrelated_events() {
-        let peer: bluer::Address = "D8:3A:DD:31:B0:49".parse().unwrap();
+        let peer: Address = "D8:3A:DD:31:B0:49".parse().unwrap();
         let data = attach_phone_source(
             "notification.show",
             serde_json::json!({ "device": "mobile-owned" }),
@@ -3224,7 +3238,7 @@ mod tests {
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(1);
         let mut handler = MsgPackProtocolHandler::new(None);
         handler.set_ota_cmd_tx(cmd_tx);
-        let peer: bluer::Address = "00:11:22:33:44:55".parse().unwrap();
+        let peer: Address = "00:11:22:33:44:55".parse().unwrap();
         handler.set_connection_peer(peer);
 
         let task = tokio::spawn(async move {

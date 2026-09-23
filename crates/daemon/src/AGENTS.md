@@ -10,6 +10,13 @@ Binary crate (`main.rs` entry). Domain modules under `src/` orchestrate Bluetoot
 src/
 ├── main.rs                 # Entry point: tracing, config, image cache, WS/HTTP servers, audio, wakeword, BT daemon
 ├── error.rs                # NocturnedError enum (thiserror)
+├── platform.rs             # Device path rerooting: `path()` joins absolute device paths under NOCTURNE_FS_ROOT for the emulator; identity on real hardware
+├── emulator/
+│   ├── mod.rs              # Emulator mode gate: `enabled()` via NOCTURNE_EMULATOR (default on for Android builds)
+│   ├── rootfs.rs           # Seeds a virtual rootfs (sysfs backlight/ALS/efuse, /dev/misc AB blob, /proc/cmdline, /etc/superbird)
+│   ├── state.rs            # Emulated Bluetooth device registry persisted under the fs-rooted state dir
+│   ├── daemon.rs           # EmulatorDaemon: BluetoothDaemon replacement; loopback TCP SPP listener instead of BlueZ/RFCOMM
+│   └── companion.rs        # Scripted emulated companion: dials the SPP listener and answers Spotify/device calls over the real chunked MsgPack wire protocol
 ├── bluetooth/
 │   ├── mod.rs              # RFCOMM listener, SDP registration, connection dispatch
 │   ├── accessory_setup.rs  # iOS 18+ AccessorySetupKit and Android pairing BLE bootstrap: connectable advertisement (service data `NOCT` under c0afc129-0068-48df-a60e-d1fedffed3cd) + iOS encrypt-read identity characteristic (fffb2ace-8c85-4ca2-9096-77831dfc84a6). Explicit classic discoverability keeps the advertisement active even with an existing LE link so Android can pair while an iPhone is connected. Outside that pairing window, an LE ACL withdraws the advertisement and disconnect recreates it for bonded-peer reconnect, avoiding the legacy controller's stale advertising state. UUIDs are pinned by the iOS app's Info.plist/AccessorySetupService.swift and the Android app's BLE filter.
@@ -56,7 +63,7 @@ main.rs
   ├─ http::WebSocketServer::new(port=5000)
   ├─ audio::AudioCapture::new() → broadcast channel
   ├─ audio::WakeWordDetector::new() → event channel
-  └─ bluetooth::BluetoothDaemon::new() → .run()
+  └─ bluetooth::BluetoothDaemon::new() → .run()   # or emulator::EmulatorDaemon::run() when emulator::enabled()
        └─ per-connection: iap2::Iap2Connection::run()
             ├─ iap2-rs connect(stream, config)
             ├─ ConnectionEvent loop: Link → Auth → Identification → EA sessions
@@ -65,6 +72,8 @@ main.rs
             │   └─ WebSocketProtocolHandler (app/websocket_handler.rs) ← WS data
             └─ NowPlaying state → WebSocket broadcast
 ```
+
+Emulator mode (Android port / host bring-up): `emulator::enabled()` swaps `BluetoothDaemon` for `EmulatorDaemon`, which accepts SPP peers over a loopback TCP listener (NOCTURNE_EMULATOR_SPP_LISTEN, default 127.0.0.1:5001) and runs the same `run_spp_msgpack_handler` used for real RFCOMM streams — the wire protocol is identical. `rootfs::seed()` stages virtual sysfs/proc/dev/etc under NOCTURNE_FS_ROOT so brightness, A/B slots, serial/MAC, and version code paths run unmodified through `platform::path()`. `state.rs` keeps the emulated paired-device registry that answers `bluetooth.devices.list` and gates inbound SPP peers. `companion.rs` is the canned phone: it emits `app.ready` plus media events and answers forwarded `spotify.*`/`device.time.get`/`phone.*`/`ota.*` calls, including companion camel-case aliases. NOCTURNE_EMULATOR_COMPANION=off disables it for live-accessory testing; NOCTURNE_EMULATOR_AMBIENT overrides the seeded ALS value. `device.power.*` responds success and exits (the app or host restarts the process); `device.factoryreset` applies the reset under the fs root then exits; `ota.activate` is a success no-op.
 
 ## WHERE TO LOOK
 

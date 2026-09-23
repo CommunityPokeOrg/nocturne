@@ -23,14 +23,21 @@ const SERVICES_TO_STOP: [&str; 4] = [
 ];
 
 pub(crate) async fn stage() -> std::io::Result<()> {
-    stage_at(Path::new(RESET_MARKER_PATH)).await
+    stage_at(&crate::platform::path(RESET_MARKER_PATH)).await
 }
 
 pub(crate) async fn apply() -> io::Result<()> {
-    let mut first_error = stop_runtime_services().await.err();
+    // On device the kiosk and bluetooth services stop before the wipe; the
+    // emulator has neither, so the only "services" to stop are the daemon's
+    // own child tasks, which exit with the process.
+    let mut first_error = if crate::emulator::enabled() {
+        None
+    } else {
+        stop_runtime_services().await.err()
+    };
 
     for directory in RESET_DIRECTORIES {
-        if let Err(error) = clear_children_at(Path::new(directory)).await {
+        if let Err(error) = clear_children_at(&crate::platform::path(directory)).await {
             if first_error.is_none() {
                 first_error = Some(error);
             }
@@ -38,7 +45,7 @@ pub(crate) async fn apply() -> io::Result<()> {
     }
 
     for file in RESET_FILES {
-        if let Err(error) = remove_file_at(Path::new(file)).await {
+        if let Err(error) = remove_file_at(&crate::platform::path(file)).await {
             if first_error.is_none() {
                 first_error = Some(error);
             }
@@ -49,7 +56,7 @@ pub(crate) async fn apply() -> io::Result<()> {
         return Err(error);
     }
 
-    remove_file_at(Path::new(RESET_MARKER_PATH)).await
+    remove_file_at(&crate::platform::path(RESET_MARKER_PATH)).await
 }
 
 async fn stage_at(path: &Path) -> std::io::Result<()> {

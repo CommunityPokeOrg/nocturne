@@ -3,7 +3,6 @@ use std::{
     time::Duration,
 };
 
-use bluer::Address;
 use libnocturne::{
     gateway::{
         OtaAssetRange, OtaAssetRangeAbandon, OtaAssetRangeChunk, OtaAssetRangeRejected,
@@ -11,6 +10,7 @@ use libnocturne::{
     },
     OtaPhase, OtaProgress, RangePart, RangeSpec,
 };
+use macaddr::MacAddr6 as Address;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},

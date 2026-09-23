@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spotify Car Thing USB identities (decimal VID/PID). -->
+<resources>
+    <!-- Amlogic burn mode / GX-CHIP USB mode: 1b8e:c003 -->
+    <usb-device vendor-id="7054" product-id="49155" />
+    <!-- Stock gadget (booted normally): 18d1:4e40 -->
+    <usb-device vendor-id="6353" product-id="20032" />
+    <!-- Mainline u-boot fastboot gadget: 18d1:fada -->
+    <usb-device vendor-id="6353" product-id="64218" />
+</resources>

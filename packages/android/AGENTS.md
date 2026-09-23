@@ -53,6 +53,38 @@ Debug APKs enable `WebView.setWebContentsDebuggingEnabled`; attach via
 `http://127.0.0.1:9229/json` (suppress the `Origin` header in WS clients —
 Android rejects non-empty origins).
 
+## CAR THING FIRMWARE FLASHER
+
+`org.nocturne.emulator.flasher` adds an in-app firmware flasher for a physical
+Spotify Car Thing connected over USB OTG (entry point: the "flasher" link in
+the corner of `MainActivity`, or plugging the device in — `USB_DEVICE_ATTACHED`
+launches `FlasherActivity` via `res/xml/device_filter.xml`).
+
+- `CarThingUsb.kt` — device detection by VID/PID + `GX-CHIP` product string
+  (modes mirror flashthing: `Usb` = buttons 1&4 held, `UsbBurn` = maskrom,
+  `Normal`/`Fastboot` rejected with guidance) and the vendor-control + bulk
+  transport layer over `UsbDeviceConnection`.
+- `AmlogicDevice.kt` — Kotlin port of flashthing's Amlogic burn-mode protocol
+  (`lib/src/aml.rs`): memory ops, `run`, `identify`, `writeLargeMemory`
+  staging, the AMLC/AMLS BL2 handshake, `bulkcmd`, partition validation, boot
+  hwpart/user-area/partition writes, `env import`. Requests, addresses, block
+  sizes, and retry/cooldown behavior must stay in lockstep with flashthing.
+- `FlashConfig.kt` — `meta.json` (Terbium subset) parser + the superbird
+  partition table; rejects the same step types flashthing rejects
+  (identify/reads/getBootAMLC/bulkcmdStat/validatePartitionSize/user-input
+  wait).
+- `FirmwarePackage.kt` — payload store over a picked zip (meta.json inside) or
+  a stock dump zip (falls back to the bundled `stock-meta.json`).
+- `FlashEngine.kt` — orchestration: detect, BL2-boot to burn mode when needed,
+  run every plan step with progress events.
+- `FlasherActivity.kt` — picker UI + explicit risk confirmation before any
+  write; requires android.hardware.usb.host (declared optional).
+
+`app/src/main/assets/flasher/` vendors `superbird.bl2.encrypted.bin`,
+`superbird.bootloader.img`, and `stock-meta.json` from flashthing (MIT —
+see `NOTICE.md`). These blobs are required to move a button-held Car Thing
+into burn mode; do not regenerate them here.
+
 ## CONVENTIONS
 
 - The daemon binary is the same `crates/daemon` crate: anything it needs at

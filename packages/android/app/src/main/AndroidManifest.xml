@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- USB host is only needed for the Car Thing flasher; the emulator still runs without OTG. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
     <application
         android:label="Nocturne Emulator"
         android:usesCleartextTraffic="true"
@@ -23,6 +26,18 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".flasher.FlasherActivity"
+            android:exported="true"
+            android:label="Car Thing Flasher">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
         </activity>
 
         <service

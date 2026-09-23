@@ -1,13 +1,20 @@
+#[cfg(not(target_os = "android"))]
 pub mod hid_mapping;
 pub mod msgpack;
+#[cfg(not(target_os = "android"))]
 pub mod websocket_handler;
 
+#[cfg(not(target_os = "android"))]
 use crate::error::Result;
 use bytes::Bytes;
+#[cfg(not(target_os = "android"))]
 use std::collections::HashMap;
+#[cfg(not(target_os = "android"))]
 use std::sync::atomic::AtomicBool;
+#[cfg(not(target_os = "android"))]
 use std::sync::Arc;
 use tokio::sync::mpsc;
+#[cfg(not(target_os = "android"))]
 use tracing::{debug, info, warn};
 
 #[allow(dead_code)]
@@ -35,14 +42,18 @@ pub struct AppSession {
     pub tx: mpsc::UnboundedSender<AppMessage>,
 }
 
+#[cfg(not(target_os = "android"))]
 use crate::app::msgpack::MsgPackProtocolHandler;
+#[cfg(not(target_os = "android"))]
 use crate::app::websocket_handler::WebSocketProtocolHandler;
 
+#[cfg(not(target_os = "android"))]
 pub enum AppProtocolHandlerEnum {
     MsgPack(Box<MsgPackProtocolHandler>),
     WebSocket(WebSocketProtocolHandler),
 }
 
+#[cfg(not(target_os = "android"))]
 impl AppProtocolHandlerEnum {
     pub fn protocol_name(&self) -> &str {
         match self {
@@ -66,12 +77,14 @@ impl AppProtocolHandlerEnum {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 pub struct AppCommunicationManager {
     sessions: HashMap<u8, AppSession>,
     handlers: HashMap<String, AppProtocolHandlerEnum>,
     to_iap2_tx: mpsc::UnboundedSender<(u8, AppMessagePriority, Bytes)>,
 }
 
+#[cfg(not(target_os = "android"))]
 impl AppCommunicationManager {
     pub fn new(to_iap2_tx: mpsc::UnboundedSender<(u8, AppMessagePriority, Bytes)>) -> Self {
         Self {

@@ -29,6 +29,7 @@ pub struct Config {
 
 const NVMEM_EFUSE_CELLS_DIR: &str = "/sys/bus/nvmem/devices/efuse0/cells";
 const SERIAL_NUMBER_CELL_PREFIX: &str = "serial-number@";
+#[cfg(not(target_os = "android"))]
 const BT_MAC_CELL_PREFIX: &str = "bt-mac@";
 const LEGACY_USID_PATH: &str = "/sys/class/efuse/usid";
 const SUPERBIRD_META_PATH: &str = "/etc/superbird";
@@ -43,6 +44,7 @@ struct SuperbirdMetadata {
     image_build_date: String,
     #[serde(default)]
     image_version: String,
+    #[cfg(not(target_os = "android"))]
     #[serde(default)]
     bt_mac: String,
     #[serde(default)]
@@ -51,8 +53,8 @@ struct SuperbirdMetadata {
 
 impl Config {
     pub fn load() -> Result<Self> {
-        let config_path = "/etc/nocturne/config.json";
-        if Path::new(config_path).exists() {
+        let config_path = crate::platform::path("/etc/nocturne/config.json");
+        if config_path.exists() {
             let contents = std::fs::read_to_string(config_path)?;
             Ok(serde_json::from_str(&contents)?)
         } else {
@@ -73,16 +75,17 @@ pub fn get_bluetooth_device_name() -> Result<String> {
 
 pub fn get_serial_number() -> Result<String> {
     read_serial_number_from_paths(
-        Path::new(NVMEM_EFUSE_CELLS_DIR),
-        Path::new(LEGACY_USID_PATH),
-        Path::new(SUPERBIRD_META_PATH),
+        &crate::platform::path(NVMEM_EFUSE_CELLS_DIR),
+        &crate::platform::path(LEGACY_USID_PATH),
+        &crate::platform::path(SUPERBIRD_META_PATH),
     )
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn get_bluetooth_mac() -> Result<[u8; 6]> {
     read_bluetooth_mac_from_paths(
-        Path::new(NVMEM_EFUSE_CELLS_DIR),
-        Path::new(SUPERBIRD_META_PATH),
+        &crate::platform::path(NVMEM_EFUSE_CELLS_DIR),
+        &crate::platform::path(SUPERBIRD_META_PATH),
     )
 }
 
@@ -112,6 +115,7 @@ fn read_serial_number_from_paths(
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn read_bluetooth_mac_from_paths(nvmem_cells_dir: &Path, metadata_path: &Path) -> Result<[u8; 6]> {
     let nvmem_err = match read_nvmem_mac_cell(nvmem_cells_dir, BT_MAC_CELL_PREFIX) {
         Ok(mac) => return Ok(mac),
@@ -133,6 +137,7 @@ fn read_nvmem_text_cell(cells_dir: &Path, prefix: &str, field: &str) -> Result<S
     read_text_identifier(&path, field)
 }
 
+#[cfg(not(target_os = "android"))]
 fn read_nvmem_mac_cell(cells_dir: &Path, prefix: &str) -> Result<[u8; 6]> {
     let path = first_nvmem_cell_path(cells_dir, prefix)?;
     let bytes = std::fs::read(&path).map_err(|err| {
@@ -191,6 +196,7 @@ fn trim_identifier(text: &str, field: &str, source: impl fmt::Display) -> Result
     Ok(value.to_string())
 }
 
+#[cfg(not(target_os = "android"))]
 fn parse_raw_bluetooth_mac(bytes: &[u8], source: impl fmt::Display) -> Result<[u8; 6]> {
     if bytes.len() != 6 {
         return Err(anyhow!(
@@ -204,6 +210,7 @@ fn parse_raw_bluetooth_mac(bytes: &[u8], source: impl fmt::Display) -> Result<[u
     Ok(mac)
 }
 
+#[cfg(not(target_os = "android"))]
 fn parse_bluetooth_mac(text: &str, source: impl fmt::Display) -> Result<[u8; 6]> {
     let mut mac = [0u8; 6];
     let mut parts = text.split(':');
@@ -238,9 +245,9 @@ fn read_superbird_metadata(path: &Path) -> Result<SuperbirdMetadata> {
 
 pub fn get_version_info() -> Result<VersionInfo> {
     read_version_info_from_paths(
-        Path::new(SUPERBIRD_META_PATH),
-        Path::new(crate::ota::BANDAID_VERSION_PATH),
-        Path::new(BANDAID_OVERLAY_ROOT),
+        &crate::platform::path(SUPERBIRD_META_PATH),
+        &crate::ota::bandaid_version_path(),
+        &crate::platform::path(BANDAID_OVERLAY_ROOT),
     )
 }
 
@@ -325,6 +332,7 @@ fn version_info_from_superbird_metadata(
     })
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn get_firmware_version() -> Result<String> {
     let info = get_version_info()?;
 

@@ -1991,6 +1991,7 @@ dependencies = [
  "iap2-rs",
  "libc",
  "libnocturne",
+ "macaddr",
  "md5",
  "ndarray",
  "nnnoiseless",

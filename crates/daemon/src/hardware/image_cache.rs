@@ -3,8 +3,6 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
-const CACHE_DIR: &str = "/var/cache/nocturned/images";
-
 pub struct ImageCache {
     cache_dir: PathBuf,
 }
@@ -15,16 +13,17 @@ impl ImageCache {
     }
 
     pub async fn new() -> Result<Self> {
-        let cache_dir = PathBuf::from(CACHE_DIR);
+        let cache_dir = crate::platform::cache_dir().join("images");
 
         if !cache_dir.exists() {
-            info!("Creating image cache directory at {}", CACHE_DIR);
+            info!("Creating image cache directory at {}", cache_dir.display());
             if let Err(err) = fs::create_dir_all(&cache_dir).await {
-                let fallback = PathBuf::from("/tmp/nocturned-image-cache");
+                let fallback = crate::platform::path("/tmp/nocturned-image-cache");
                 warn!(
                     %err,
                     fallback = %fallback.display(),
-                    "failed to create {CACHE_DIR}; falling back to ephemeral tmpfs cache",
+                    "failed to create {}; falling back to ephemeral tmpfs cache",
+                    cache_dir.display(),
                 );
                 fs::create_dir_all(&fallback).await?;
                 return Ok(Self {

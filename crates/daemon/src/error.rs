@@ -2,12 +2,15 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum NocturnedError {
+    #[cfg(not(target_os = "android"))]
     #[error("Bluetooth error: {0}")]
     Bluetooth(#[from] bluer::Error),
 
+    #[cfg(not(target_os = "android"))]
     #[error("iAP2 protocol error: {0}")]
     Iap2Protocol(String),
 
+    #[cfg(not(target_os = "android"))]
     #[error("MFi device error: {0}")]
     MfiDevice(String),
 

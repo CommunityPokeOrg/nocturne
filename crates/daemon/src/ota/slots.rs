@@ -17,7 +17,7 @@ pub enum SlotsError {
 }
 
 pub fn host_stub_enabled() -> bool {
-    std::env::var("NOCTURNE_SLOTS_STUB").as_deref() == Ok("1")
+    std::env::var("NOCTURNE_SLOTS_STUB").as_deref() == Ok("1") || crate::emulator::enabled()
 }
 
 pub fn active_slot() -> Result<char, SlotsError> {
@@ -58,7 +58,7 @@ fn running_slot() -> Result<char, SlotsError> {
         return Ok('a');
     }
 
-    let cmdline = std::fs::read_to_string(CMDLINE_PATH)?;
+    let cmdline = std::fs::read_to_string(crate::platform::path(CMDLINE_PATH))?;
     parse_running_slot(&cmdline)
 }
 

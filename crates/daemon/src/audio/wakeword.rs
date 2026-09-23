@@ -64,10 +64,10 @@ fn parse_threshold(raw: &str) -> Option<f32> {
 }
 
 async fn load_preference_muted() -> bool {
-    if !Path::new(PREFERENCE_PATH).exists() {
+    if !crate::platform::path(PREFERENCE_PATH).exists() {
         return false;
     }
-    match fs::read_to_string(PREFERENCE_PATH).await {
+    match fs::read_to_string(crate::platform::path(PREFERENCE_PATH)).await {
         Ok(content) => content.trim() == "paused",
         Err(err) => {
             warn!("Failed to read persisted wake word preference: {}", err);
@@ -78,7 +78,7 @@ async fn load_preference_muted() -> bool {
 
 async fn save_preference_muted(muted: bool) {
     let content = if muted { "paused" } else { "running" };
-    if let Err(err) = fs::write(PREFERENCE_PATH, content).await {
+    if let Err(err) = fs::write(crate::platform::path(PREFERENCE_PATH), content).await {
         warn!("Failed to persist wake word preference: {}", err);
     }
 }

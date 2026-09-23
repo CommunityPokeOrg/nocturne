@@ -63,11 +63,11 @@ impl Default for BrightnessConfig {
 }
 
 pub async fn get_brightness_config() -> Result<BrightnessConfig> {
-    if !Path::new(BRIGHTNESS_SAVE_PATH).exists() {
+    if !crate::platform::path(BRIGHTNESS_SAVE_PATH).exists() {
         return Ok(BrightnessConfig::default());
     }
 
-    let data = fs::read_to_string(BRIGHTNESS_SAVE_PATH).await?;
+    let data = fs::read_to_string(crate::platform::path(BRIGHTNESS_SAVE_PATH)).await?;
     let mut config: BrightnessConfig = serde_json::from_str(&data)?;
     config.brightness = clamp_brightness(config.brightness);
     Ok(config)
@@ -102,7 +102,7 @@ async fn discover_backlight_device() -> Result<BacklightDevice> {
 
     let mut candidates = Vec::new();
 
-    if let Ok(mut entries) = fs::read_dir(BACKLIGHT_CLASS_DIR).await {
+    if let Ok(mut entries) = fs::read_dir(crate::platform::path(BACKLIGHT_CLASS_DIR)).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             candidates.push(entry.path());
         }
@@ -125,6 +125,21 @@ async fn discover_backlight_device() -> Result<BacklightDevice> {
         "no usable backlight device found under {}",
         BACKLIGHT_CLASS_DIR
     )))
+}
+
+async fn discover_ambient_iio_devices() -> Vec<PathBuf> {
+    let mut devices = Vec::new();
+    let Ok(mut entries) = fs::read_dir(crate::platform::path(IIO_BUS_DIR)).await else {
+        return devices;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let file_name = entry.file_name();
+        if !file_name.to_string_lossy().starts_with("iio:device") {
+            continue;
+        }
+        devices.push(entry.path());
+    }
+    devices
 }
 
 fn clamp_brightness(value: u8) -> u8 {
@@ -180,7 +195,7 @@ async fn save_config(config: &BrightnessConfig) {
             return;
         }
     };
-    if let Err(e) = fs::write(BRIGHTNESS_SAVE_PATH, data).await {
+    if let Err(e) = fs::write(crate::platform::path(BRIGHTNESS_SAVE_PATH), data).await {
         warn!("Failed to save brightness config: {}", e);
     }
 }
@@ -624,19 +639,12 @@ async fn discover_ambient_light_path() -> Option<PathBuf> {
         return Some(path.clone());
     }
 
-    if let Ok(mut entries) = fs::read_dir(IIO_BUS_DIR).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let file_name = entry.file_name();
-            if !file_name.to_string_lossy().starts_with("iio:device") {
-                continue;
-            }
-            let device_path = entry.path();
-            if let Some(path) = ambient_light_file_in_iio_device(&device_path).await {
-                configure_ambient_light_sensor(&device_path).await;
-                let _ = AMBIENT_LIGHT_PATH.set(path.clone());
-                info!("Using ambient light sensor {}", path.display());
-                return Some(path);
-            }
+    for device_path in discover_ambient_iio_devices().await {
+        if let Some(path) = ambient_light_file_in_iio_device(&device_path).await {
+            configure_ambient_light_sensor(&device_path).await;
+            let _ = AMBIENT_LIGHT_PATH.set(path.clone());
+            info!("Using ambient light sensor {}", path.display());
+            return Some(path);
         }
     }
 

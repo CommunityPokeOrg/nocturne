@@ -57,6 +57,11 @@ jobs:
 
       - name: Build APK (bundles nocturned for both ABIs)
         working-directory: packages/android
+        env:
+          # audiopus_sys falls back to building vendored opus via CMake;
+          # its CMakeLists declares < 3.5, which CMake 4.x (macOS image)
+          # removed. Override the minimum for the configure step.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK

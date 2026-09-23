@@ -257,6 +257,16 @@ fn chrono_like_now() -> String {
     )
 }
 
+fn local_time_hms() -> String {
+    // The emulated companion reports UTC as its local timezone.
+    let rem = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        % 86_400;
+    format!("{:02}:{:02}:{:02}", rem / 3600, (rem % 3600) / 60, rem % 60)
+}
+
 fn days_to_ymd(days_since_epoch: u64) -> (u64, u64, u64) {
     // Howard Hinnant's civil-from-days algorithm.
     let z = days_since_epoch + 719_468;
@@ -454,7 +464,13 @@ fn handle_call(
         | "spotify.radio.topMix" => {
             serde_json::json!({ "items": [], "status": "ok" })
         }
-        "device.time.get" => serde_json::json!({ "datetime": chrono_like_now() }),
+        "device.time.get" => serde_json::json!({
+            "datetime": chrono_like_now(),
+            "time": local_time_hms(),
+        }),
+        "device.timezone.get" => {
+            serde_json::json!({ "identifier": "UTC", "name": "UTC" })
+        }
         "phone.calls.get" => serde_json::json!({ "calls": [] }),
         "phone.call.accept" | "phone.call.decline" => serde_json::json!({ "status": "ok" }),
         "tts.speak" | "voice.cancel" | "notification.remove" => serde_json::json!({}),

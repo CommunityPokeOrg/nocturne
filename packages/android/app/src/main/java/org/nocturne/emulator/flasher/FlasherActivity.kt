@@ -49,6 +49,7 @@ class FlasherActivity : Activity() {
     private lateinit var logView: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var progressText: TextView
+    private lateinit var logScroll: ScrollView
     private lateinit var confirmCheck: CheckBox
     private lateinit var pickButton: Button
     private lateinit var flashButton: Button
@@ -189,9 +190,17 @@ class FlasherActivity : Activity() {
             setTextColor(0xFF9E9E9E.toInt())
             textSize = 12f
         }
-        content.addView(ScrollView(this).apply { addView(logView) })
+        // Bounded height keeps the log independently scrollable inside the
+        // outer ScrollView without it growing to push the buttons offscreen.
+        logScroll = ScrollView(this).apply {
+            addView(logView)
+        }
+        content.addView(logScroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (LOG_HEIGHT_DP * resources.displayMetrics.density).toInt(),
+        ))
 
-        setContentView(content)
+        setContentView(ScrollView(this).apply { addView(content) })
     }
 
     private fun updateFlashEnabled() {
@@ -361,9 +370,11 @@ class FlasherActivity : Activity() {
 
     private fun appendLog(line: String) {
         logView.append(line + "\n")
+        logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
     companion object {
+        private const val LOG_HEIGHT_DP = 180
         private const val REQ_PICK_FIRMWARE = 42
         private const val ACTION_USB_PERMISSION = "org.nocturne.emulator.USB_PERMISSION"
         private const val BL2_ASSET = "flasher/superbird.bl2.encrypted.bin"

@@ -13,9 +13,12 @@ An offline, full-firmware emulator for the Spotify Car Thing UX:
   `lib/<abi>/libnocturned.so`, extracted executable via
   `android:extractNativeLibs="true"` + `useLegacyPackaging`) with
   `NOCTURNE_EMULATOR=1`, `NOCTURNE_FS_ROOT=<filesDir>/fsroot` (all daemon device
-  paths reroot into a virtual rootfs), `NOCTURNE_WEBAPPS_DIR=<filesDir>/webapps/ui`
-  (must point at the `ui` subdirectory itself, not its parent), and
-  `NOCTURNE_SLOTS_STUB=1`. The supervisor restarts the binary if it exits.
+  paths reroot into a virtual rootfs), `NOCTURNE_WEBAPPS_DIR` (must point at the
+  `ui` subdirectory itself, not its parent — `<filesDir>/webapps-imported/ui`
+  when an imported bundle with index.html exists, else the bundled
+  `<filesDir>/webapps/ui`), and `NOCTURNE_SLOTS_STUB=1`. The supervisor
+  restarts the binary if it exits; `DaemonService.restart(context)` destroys
+  the process so the next spawn picks up a newly imported bundle.
 - The daemon's emulator module starts a TCP SPP listener (default
   `127.0.0.1:5001`) and a scripted companion speaks the real chunked MsgPack
   wire protocol against it (`app.ready`, now-playing, artwork, `device.time.get`,
@@ -84,6 +87,29 @@ launches `FlasherActivity` via `res/xml/device_filter.xml`).
 `superbird.bootloader.img`, and `stock-meta.json` from flashthing (MIT —
 see `NOTICE.md`). These blobs are required to move a button-held Car Thing
 into burn mode; do not regenerate them here.
+
+## EMULATOR FIRMWARE IMPORT
+
+`ImportActivity` + `EmulatorFirmware` are the safe counterpart of the USB
+flasher: they load a Nocturne-compatible webapp bundle into the emulator
+without touching hardware ("import" link in `MainActivity`, opposite corner
+from "flasher").
+
+- A picked zip is analyzed for a webapp bundle by locating `index.html`;
+  a directory literally named `ui/` is preferred (`webapps/ui/`, `dist/ui/`,
+  `ui/`), otherwise the shallowest `index.html` wins. Everything under that
+  root extracts into `filesDir/webapps-imported/ui` via a staging dir that
+  only swaps in on success.
+- Optional `fsroot/etc/superbird` and `fsroot/proc/cmdline` entries stage
+  emulated device identity into `NOCTURNE_FS_ROOT`; all other `fsroot/`
+  entries are ignored (allowlist in `EmulatorFirmware.FSROOT_ALLOWLIST`).
+- DaemonService's next spawn then serves the imported bundle; the daemon
+  restart is requested through `DaemonService.restart`, never a new service.
+- Rejected by design: flashthing/stock/Mira archives whose payload lives
+  inside raw partition images. The emulator runs only `nocturned` + one
+  webapp; it has no system emulator for a foreign userspace (Mira's stack
+  is a Go daemon + a different UI protocol, so even its webapp alone would
+  be a dead frontend). Do not add ext4/partition extraction or pretend USB.
 
 ## CONVENTIONS
 

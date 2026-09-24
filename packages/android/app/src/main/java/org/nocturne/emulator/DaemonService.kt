@@ -40,6 +40,11 @@ class DaemonService : Service() {
         if (!running) {
             running = true
             supervisorThread = Thread({ supervise() }, "nocturned-supervisor").also { it.start() }
+        } else if (intent?.action == ACTION_RESTART) {
+            // The supervisor respawns the daemon once this exits, picking up
+            // an imported webapp bundle / staged fsroot identity.
+            Log.i(TAG, "restarting nocturned on request")
+            daemonProcess?.destroy()
         }
         return START_STICKY
     }
@@ -83,6 +88,10 @@ class DaemonService : Service() {
         val webapps = File(files, "webapps").apply { mkdirs() }
         val fsroot = File(files, "fsroot").apply { mkdirs() }
         extractAssets(webapps)
+        // An imported firmware webapp (ImportActivity) takes precedence over
+        // the bundled one whenever it has a real index.html.
+        val importedUi = File(files, "webapps-imported/ui")
+        val uiDir = if (File(importedUi, "index.html").isFile) importedUi else File(webapps, "ui")
 
         val daemon = File(applicationInfo.nativeLibraryDir, "libnocturned.so")
         check(daemon.exists()) { "bundled daemon missing at ${daemon.absolutePath}" }
@@ -95,11 +104,11 @@ class DaemonService : Service() {
             put("HOME", files.absolutePath)
             put("NOCTURNE_EMULATOR", "1")
             put("NOCTURNE_FS_ROOT", fsroot.absolutePath)
-            put("NOCTURNE_WEBAPPS_DIR", File(webapps, "ui").absolutePath)
+            put("NOCTURNE_WEBAPPS_DIR", uiDir.absolutePath)
             put("NOCTURNE_SLOTS_STUB", "1")
             put("RUST_BACKTRACE", "1")
         }
-        Log.i(TAG, "spawning ${daemon.absolutePath} (fsroot=$fsroot)")
+        Log.i(TAG, "spawning ${daemon.absolutePath} (fsroot=$fsroot, webapps=$uiDir)")
         return builder.start()
     }
 
@@ -150,8 +159,17 @@ class DaemonService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val RESTART_DELAY_MS = 1000L
 
+        private const val ACTION_RESTART = "org.nocturne.emulator.RESTART_DAEMON"
+
         fun start(context: Context) {
             context.startForegroundService(Intent(context, DaemonService::class.java))
+        }
+
+        /** Kill the daemon process so the supervisor respawns it fresh. */
+        fun restart(context: Context) {
+            context.startService(
+                Intent(context, DaemonService::class.java).setAction(ACTION_RESTART),
+            )
         }
     }
 }

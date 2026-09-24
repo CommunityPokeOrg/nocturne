@@ -2,6 +2,7 @@ package org.nocturne.emulator
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.view.Gravity
@@ -18,6 +19,7 @@ import android.widget.TextView
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.math.min
+import org.nocturne.emulator.flasher.FlasherActivity
 
 /**
  * Kiosk host for the emulated Car Thing: a WebView rendering the real UI
@@ -80,6 +82,16 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }
 
+        val flasherLink = TextView(this).apply {
+            text = "flasher"
+            setTextColor(0xFF616161.toInt())
+            textSize = 11f
+            setPadding(16, 16, 16, 16)
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, FlasherActivity::class.java))
+            }
+        }
+
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             // The panel is scaled around its top-left corner and centered by
@@ -90,6 +102,11 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER,
+            ))
+            addView(flasherLink, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.END,
             ))
         }
         setContentView(root)

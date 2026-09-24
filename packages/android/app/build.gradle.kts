@@ -51,6 +51,9 @@ cargoAbis.forEach { (abi, triple) ->
             "CARGO_TARGET_${envTriple.uppercase()}_LINKER",
             clang.absolutePath,
         )
+        // audiopus_sys builds vendored opus via CMake; its CMakeLists
+        // declares < 3.5, removed in CMake 4.x (ignored by older CMake).
+        environment("CMAKE_POLICY_VERSION_MINIMUM", "3.5")
         inputs.dir(File(repoRoot, "crates/daemon/src"))
         outputs.file(File(repoRoot, "target/$triple/release/nocturned"))
     }

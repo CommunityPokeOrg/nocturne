@@ -31,6 +31,7 @@ import org.nocturne.emulator.flasher.FlasherActivity
 class MainActivity : Activity() {
 
     private lateinit var webView: WebView
+    private var loadedOnce = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,6 +93,16 @@ class MainActivity : Activity() {
             }
         }
 
+        val importLink = TextView(this).apply {
+            text = "import"
+            setTextColor(0xFF616161.toInt())
+            textSize = 11f
+            setPadding(16, 16, 16, 16)
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, ImportActivity::class.java))
+            }
+        }
+
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             // The panel is scaled around its top-left corner and centered by
@@ -108,6 +119,11 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.END,
             ))
+            addView(importLink, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.START,
+            ))
         }
         setContentView(root)
 
@@ -118,9 +134,17 @@ class MainActivity : Activity() {
             waitForDaemon()
             runOnUiThread {
                 status.visibility = View.GONE
+                loadedOnce = true
                 webView.loadUrl(DAEMON_UI_URL)
             }
         }.start()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Returning from ImportActivity after a daemon restart needs a reload
+        // so the WebView picks up the newly served bundle.
+        if (loadedOnce) webView.reload()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
